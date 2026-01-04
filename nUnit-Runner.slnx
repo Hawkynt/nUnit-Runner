@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="UniversalRunner\UniversalRunner.csproj" />
+  <Project Path="UniversalRunner.Tests\UniversalRunner.Tests.csproj" />
+</Solution>
