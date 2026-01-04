@@ -47,7 +47,7 @@ You run: bin/Release/net9.0/TestRunner.dll Tests/bin/Release --all
 ## 🎯 Supported Frameworks
 
 | .NET Framework                               | .NET Core     | .NET             |
-|----------------------------------------------|---------------|------------------|
+| -------------------------------------------- | ------------- | ---------------- |
 | net20, net35, net40, net45                   | netcoreapp3.1 | net5.0 - net10.0 |
 | net461, net462, net47, net471, net472, net48 |               |                  |
 
@@ -66,9 +66,41 @@ TestRunner Tests/bin/Release --all --frameworks net20,net48,net9.0
 # Single assembly
 TestRunner Tests/bin/Release/net48/MyTests.dll
 
-# Filter by test name
+# Filter by test name (substring match)
 TestRunner Tests/bin/Release --all --filter StringTests
+
+# NUnit-style where expressions
+TestRunner Tests.dll --where "cat == Unit"
+TestRunner Tests.dll --where "class =~ /String.*/"
+TestRunner Tests.dll --where "cat == Unit and not method == SlowTest"
+TestRunner Tests.dll --where "(cat == Integration or cat == E2E) and namespace =~ /MyApp.*/"
 ```
+
+### Where Expression Syntax
+
+The `--where` option supports NUnit-style filter expressions:
+
+| Property           | Description                                 |
+| ------------------ | ------------------------------------------- |
+| `cat` / `category` | Test category (from `[Category]` attribute) |
+| `class`            | Test fixture class name                     |
+| `method`           | Test method name                            |
+| `namespace`        | Namespace of the test class                 |
+| `test` / `name`    | Full test name (Namespace.Class.Method)     |
+
+| Operator | Description               |
+| -------- | ------------------------- |
+| `!~`     | Regex does not match      |
+| `!=`     | Not equals                |
+| `=~`     | Regex match               |
+| `==`     | Equals (case-insensitive) |
+
+| Boolean | Description                   |
+| ------- | ----------------------------- |
+| `()`    | Grouping for precedence       |
+| `and`   | Both conditions must be true  |
+| `not`   | Inverts the condition         |
+| `or`    | Either condition must be true |
 
 ## 📊 Example Output
 

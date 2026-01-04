@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace UniversalTestRunner;
@@ -36,32 +37,376 @@ internal class Program {
     Console.WriteLine("  TestRunner <directory> --all [options]    Run all framework variants");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --filter <pattern>     Filter tests by name pattern");
+    Console.WriteLine("  --filter <pattern>     Filter tests by name pattern (substring match)");
+    Console.WriteLine("  --where <expr>         NUnit-style filter expression");
     Console.WriteLine("  --all                  Run all framework variants found in directory");
     Console.WriteLine("  --parallel             Run frameworks in parallel");
     Console.WriteLine("  --frameworks <list>    Comma-separated list of frameworks to run");
     Console.WriteLine("  --verbose              Show detailed output");
     Console.WriteLine("  --help                 Show this help");
     Console.WriteLine();
+    Console.WriteLine("Where Expression Syntax:");
+    Console.WriteLine("  Properties: test, class, method, name, namespace, cat/category");
+    Console.WriteLine("  Operators:  == (equals), != (not equals), =~ (regex), !~ (not regex)");
+    Console.WriteLine("  Boolean:    and, or, not, parentheses for grouping");
+    Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  TestRunner Tests/bin/Release/net20/Tests.dll");
     Console.WriteLine("  TestRunner Tests/bin/Release --all --parallel");
     Console.WriteLine("  TestRunner Tests/bin/Release --frameworks net20,net48,net9.0");
+    Console.WriteLine("  TestRunner Tests.dll --where \"cat == Unit\"");
+    Console.WriteLine("  TestRunner Tests.dll --where \"class =~ /String.*/ and not method == SlowTest\"");
   }
 
   #region Argument Parsing
 
   private class Options {
-    public List<string> AssemblyPaths { get; } = new();
+    public List<string> AssemblyPaths { get; } = [];
     public string? TestDirectory { get; set; }
     public string? Filter { get; set; }
+    public string? Where { get; set; }
     public bool RunAll { get; set; }
     public bool Parallel { get; set; }
     public bool Verbose { get; set; }
     public bool WorkerMode { get; set; }
     public bool ShowHelp { get; set; }
-    public List<string> Frameworks { get; } = new();
+    public List<string> Frameworks { get; } = [];
+
+    public WhereExpr? WhereExpression {
+      get {
+        if (field == null && Where != null)
+          field = new WhereParser(Where).Parse();
+        return field;
+      }
+    }
   }
+
+  #region Where Filter
+
+  private enum TokenType {
+    And, Or, Not,
+    Test, Class, Method, Name, Namespace, Cat, Category,
+    Equal, NotEqual, RegexMatch, RegexNotMatch,
+    String, RegexLiteral, Identifier,
+    LeftParen, RightParen,
+    Eof, Invalid
+  }
+
+  private sealed class WhereToken(TokenType type, string value, int position)
+  {
+    public TokenType Type { get; } = type;
+    public string Value { get; } = value;
+    public int Position { get; } = position;
+  }
+
+  private sealed class WhereLexer(string input)
+  {
+    private readonly string _input = input ?? "";
+    private int _position;
+
+    public WhereToken NextToken() {
+      SkipWhitespace();
+      if (_position >= _input.Length)
+        return new(TokenType.Eof, "", _position);
+
+      var start = _position;
+      var c = _input[_position];
+
+      // Parentheses
+      if (c == '(') { ++_position; return new(TokenType.LeftParen, "(", start); }
+      if (c == ')') { ++_position; return new(TokenType.RightParen, ")", start); }
+
+      // Operators
+      if (c == '=' && Peek(1) == '=') { _position += 2; return new(TokenType.Equal, "==", start); }
+      if (c == '!' && Peek(1) == '=') { _position += 2; return new(TokenType.NotEqual, "!=", start); }
+      if (c == '=' && Peek(1) == '~') { _position += 2; return new(TokenType.RegexMatch, "=~", start); }
+      if (c == '!' && Peek(1) == '~') { _position += 2; return new(TokenType.RegexNotMatch, "!~", start); }
+
+      // String literals
+      if (c is '"' or '\'')
+        return ReadString(c);
+
+      // Regex literals
+      if (c == '/')
+        return ReadRegex();
+
+      // Keywords and identifiers
+      if (char.IsLetter(c) || c == '_')
+        return ReadIdentifier();
+
+      return new(TokenType.Invalid, c.ToString(), start);
+    }
+
+    private char Peek(int offset) {
+      var pos = _position + offset;
+      return pos < _input.Length ? _input[pos] : '\0';
+    }
+
+    private void SkipWhitespace() {
+      while (_position < _input.Length && char.IsWhiteSpace(_input[_position]))
+        ++_position;
+    }
+
+    private WhereToken ReadString(char quote) {
+      var start = _position++;
+      var sb = new StringBuilder();
+      while (_position < _input.Length) {
+        var c = _input[_position];
+        if (c == quote) { ++_position; break; }
+        if (c == '\\' && _position + 1 < _input.Length) {
+          ++_position;
+          sb.Append(_input[_position++]);
+        } else {
+          sb.Append(c);
+          ++_position;
+        }
+      }
+      return new(TokenType.String, sb.ToString(), start);
+    }
+
+    private WhereToken ReadRegex() {
+      var start = _position++;
+      var sb = new StringBuilder();
+      while (_position < _input.Length) {
+        var c = _input[_position];
+        if (c == '/') { ++_position; break; }
+        if (c == '\\' && _position + 1 < _input.Length) {
+          ++_position;
+          var next = _input[_position++];
+          if (next != '/') sb.Append('\\');
+          sb.Append(next);
+        } else {
+          sb.Append(c);
+          ++_position;
+        }
+      }
+      return new(TokenType.RegexLiteral, sb.ToString(), start);
+    }
+
+    private WhereToken ReadIdentifier() {
+      var start = _position;
+      while (_position < _input.Length && (char.IsLetterOrDigit(_input[_position]) || _input[_position] == '_' || _input[_position] == '.'))
+        ++_position;
+      var value = _input.Substring(start, _position - start);
+      var type = value.ToLowerInvariant() switch {
+        "and" => TokenType.And,
+        "or" => TokenType.Or,
+        "not" => TokenType.Not,
+        "test" => TokenType.Test,
+        "class" => TokenType.Class,
+        "method" => TokenType.Method,
+        "name" => TokenType.Name,
+        "namespace" => TokenType.Namespace,
+        "cat" => TokenType.Cat,
+        "category" => TokenType.Category,
+        _ => TokenType.Identifier
+      };
+      return new(type, value, start);
+    }
+  }
+
+  internal abstract class WhereExpr {
+    public abstract bool Evaluate(TestContext context);
+  }
+
+  private sealed class BinaryExpr(WhereExpr left, WhereExpr right, bool isOr) : WhereExpr
+  {
+    public WhereExpr Left { get; } = left;
+    public WhereExpr Right { get; } = right;
+    public bool IsOr { get; } = isOr;
+
+    public override bool Evaluate(TestContext context) =>
+      IsOr ? Left.Evaluate(context) || Right.Evaluate(context)
+           : Left.Evaluate(context) && Right.Evaluate(context);
+  }
+
+  private sealed class UnaryExpr(WhereExpr operand) : WhereExpr
+  {
+    public WhereExpr Operand { get; } = operand;
+
+    public override bool Evaluate(TestContext context) => !Operand.Evaluate(context);
+  }
+
+  private sealed class ComparisonExpr : WhereExpr {
+    public TokenType Property { get; }
+    public TokenType Operator { get; }
+    public string Value { get; }
+    public Regex? CompiledRegex { get; }
+
+    public ComparisonExpr(TokenType property, TokenType op, string value) {
+      Property = property;
+      Operator = op;
+      Value = value;
+      if (op is TokenType.RegexMatch or TokenType.RegexNotMatch)
+        CompiledRegex = new(value, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    public override bool Evaluate(TestContext context) {
+      var values = GetPropertyValues(context);
+      return Operator switch {
+        TokenType.Equal => values.Any(v => string.Equals(v, Value, StringComparison.OrdinalIgnoreCase)),
+        TokenType.NotEqual => values.All(v => !string.Equals(v, Value, StringComparison.OrdinalIgnoreCase)),
+        TokenType.RegexMatch => CompiledRegex != null && values.Any(v => CompiledRegex.IsMatch(v)),
+        TokenType.RegexNotMatch => CompiledRegex == null || values.All(v => !CompiledRegex.IsMatch(v)),
+        _ => false
+      };
+    }
+
+    private IEnumerable<string> GetPropertyValues(TestContext context) {
+      return Property switch {
+        TokenType.Test or TokenType.Name => new[] { context.FullName },
+        TokenType.Class => new[] { context.ClassName, context.FullClassName },
+        TokenType.Method => new[] { context.MethodName },
+        TokenType.Namespace => new[] { context.Namespace },
+        TokenType.Cat or TokenType.Category => context.Categories,
+        _ => new string[0]
+      };
+    }
+  }
+
+  internal sealed class TestContext {
+    public string FullName { get; set; } = "";
+    public string ClassName { get; set; } = "";
+    public string FullClassName { get; set; } = "";
+    public string MethodName { get; set; } = "";
+    public string Namespace { get; set; } = "";
+    public List<string> Categories { get; } = [];
+
+    public static TestContext FromMethod(Type fixtureType, MethodInfo method, string? args = null) {
+      var ns = fixtureType.Namespace ?? "";
+      var className = fixtureType.Name;
+      var fullClassName = fixtureType.FullName ?? className;
+      var methodName = method.Name;
+      var fullName = args != null
+        ? $"{fullClassName}.{methodName}({args})"
+        : $"{fullClassName}.{methodName}";
+
+      var ctx = new TestContext {
+        FullName = fullName,
+        ClassName = className,
+        FullClassName = fullClassName,
+        MethodName = methodName,
+        Namespace = ns
+      };
+
+      // Get categories from method and class
+      foreach (var cat in GetCategories(method))
+        ctx.Categories.Add(cat);
+      foreach (var cat in GetCategories(fixtureType))
+        if (!ctx.Categories.Contains(cat))
+          ctx.Categories.Add(cat);
+
+      return ctx;
+    }
+
+    private static IEnumerable<string> GetCategories(MemberInfo member) {
+      foreach (var attr in member.GetCustomAttributes(true)) {
+        if (attr.GetType().Name != "CategoryAttribute")
+          continue;
+        var nameProp = attr.GetType().GetProperty("Name");
+        if (nameProp == null)
+          continue;
+        var name = nameProp.GetValue(attr) as string;
+        if (!string.IsNullOrEmpty(name))
+          yield return name;
+      }
+    }
+  }
+
+  private sealed class WhereParseException(string message, int position) : Exception(message)
+  {
+    public int Position { get; } = position;
+  }
+
+  private sealed class WhereParser {
+    private readonly WhereLexer _lexer;
+    private WhereToken _current;
+
+    public WhereParser(string input) {
+      _lexer = new(input);
+      _current = _lexer.NextToken();
+    }
+
+    public WhereExpr Parse() {
+      var expr = ParseOrExpr();
+      if (_current.Type != TokenType.Eof)
+        throw new WhereParseException($"Unexpected token: {_current.Value}", _current.Position);
+      return expr;
+    }
+
+    private WhereExpr ParseOrExpr() {
+      var left = ParseAndExpr();
+      while (_current.Type == TokenType.Or) {
+        Advance();
+        var right = ParseAndExpr();
+        left = new BinaryExpr(left, right, true);
+      }
+      return left;
+    }
+
+    private WhereExpr ParseAndExpr() {
+      var left = ParseUnaryExpr();
+      while (_current.Type == TokenType.And) {
+        Advance();
+        var right = ParseUnaryExpr();
+        left = new BinaryExpr(left, right, false);
+      }
+      return left;
+    }
+
+    private WhereExpr ParseUnaryExpr() {
+      if (_current.Type == TokenType.Not) {
+        Advance();
+        return new UnaryExpr(ParseUnaryExpr());
+      }
+      return ParsePrimary();
+    }
+
+    private WhereExpr ParsePrimary() {
+      if (_current.Type == TokenType.LeftParen) {
+        Advance();
+        var expr = ParseOrExpr();
+        Expect(TokenType.RightParen);
+        return expr;
+      }
+      return ParseComparison();
+    }
+
+    private ComparisonExpr ParseComparison() {
+      var property = _current.Type;
+      if (property != TokenType.Test && property != TokenType.Class &&
+          property != TokenType.Method && property != TokenType.Name &&
+          property != TokenType.Namespace && property != TokenType.Cat &&
+          property != TokenType.Category)
+        throw new WhereParseException($"Expected property (test, class, method, name, namespace, cat), got: {_current.Value}", _current.Position);
+      Advance();
+
+      var op = _current.Type;
+      if (op != TokenType.Equal && op != TokenType.NotEqual &&
+          op != TokenType.RegexMatch && op != TokenType.RegexNotMatch)
+        throw new WhereParseException($"Expected operator (==, !=, =~, !~), got: {_current.Value}", _current.Position);
+      Advance();
+
+      string value;
+      if (_current.Type is TokenType.String or TokenType.RegexLiteral or TokenType.Identifier)
+        value = _current.Value;
+      else
+        throw new WhereParseException($"Expected value, got: {_current.Value}", _current.Position);
+      Advance();
+
+      return new(property, op, value);
+    }
+
+    private void Advance() => _current = _lexer.NextToken();
+
+    private void Expect(TokenType type) {
+      if (_current.Type != type)
+        throw new WhereParseException($"Expected {type}, got: {_current.Value}", _current.Position);
+      Advance();
+    }
+  }
+
+  #endregion
 
   private static Options ParseArgs(string[] args) {
     var options = new Options();
@@ -69,29 +414,46 @@ internal class Program {
     for (var i = 0; i < args.Length; ++i) {
       var arg = args[i];
 
-      if (arg == "--filter" && i + 1 < args.Length)
-        options.Filter = args[++i];
-      else if (arg == "--all")
-        options.RunAll = true;
-      else if (arg == "--parallel")
-        options.Parallel = true;
-      else if (arg == "--verbose")
-        options.Verbose = true;
-      else if (arg == "--worker")
-        options.WorkerMode = true;
-      else if (arg == "--help" || arg == "-h")
-        options.ShowHelp = true;
-      else if (arg == "--frameworks" && i + 1 < args.Length) {
-        var fws = args[++i].Split(',');
-        foreach (var fw in fws)
-          options.Frameworks.Add(fw.Trim());
-      } else if (!arg.StartsWith("-")) {
-        if (Directory.Exists(arg))
-          options.TestDirectory = arg;
-        else if (File.Exists(arg))
-          options.AssemblyPaths.Add(arg);
-        else
-          Console.WriteLine($"Warning: Path not found: {arg}");
+      switch (arg) {
+        case "--filter" when i + 1 < args.Length:
+          options.Filter = args[++i];
+          break;
+        case "--where" when i + 1 < args.Length:
+          options.Where = args[++i];
+          break;
+        case "--all":
+          options.RunAll = true;
+          break;
+        case "--parallel":
+          options.Parallel = true;
+          break;
+        case "--verbose":
+          options.Verbose = true;
+          break;
+        case "--worker":
+          options.WorkerMode = true;
+          break;
+        case "--help" or "-h":
+          options.ShowHelp = true;
+          break;
+        case "--frameworks" when i + 1 < args.Length: {
+          var fws = args[++i].Split(',');
+          foreach (var fw in fws)
+            options.Frameworks.Add(fw.Trim());
+          break;
+        }
+        default: {
+          if (!arg.StartsWith("-")) {
+            if (Directory.Exists(arg))
+              options.TestDirectory = arg;
+            else if (File.Exists(arg))
+              options.AssemblyPaths.Add(arg);
+            else
+              Console.WriteLine($"Warning: Path not found: {arg}");
+          }
+
+          break;
+        }
       }
     }
 
@@ -115,7 +477,7 @@ internal class Program {
     }
 
     try {
-      var runner = new TestRunner(assemblyPath, options.Filter, options.Verbose);
+      var runner = new TestRunner(assemblyPath, options.Filter, options.WhereExpression, options.Verbose);
       var result = runner.Run();
 
       // Output JSON result
@@ -136,12 +498,13 @@ internal class Program {
   // Note: netstandard is excluded - it's a specification, not a runtime.
   // netstandard builds are verified by compilation, but can't be tested canonically
   // because any host runtime's BCL types take precedence over polyfills.
-  private static readonly string[] KnownFrameworks = {
+  private static readonly string[] KnownFrameworks =
+  [
     "net20", "net35", "net40", "net45",
     "net461", "net462", "net47", "net471", "net472", "net48",
     "netcoreapp3.1",
     "net5.0", "net6.0", "net7.0", "net8.0", "net9.0", "net10.0"
-  };
+  ];
 
   private static int RunAsOrchestrator(Options options) {
     Console.WriteLine("Universal Test Runner v1.0");
@@ -255,10 +618,10 @@ internal class Program {
     if (runnerPath == null || !File.Exists(runnerPath)) {
       // Fall back to running directly if we're compatible
       if (CanRunDirectly(framework)) {
-        var runner = new TestRunner(assemblyPath, options.Filter, options.Verbose);
+        var runner = new TestRunner(assemblyPath, options.Filter, options.WhereExpression, options.Verbose);
         return runner.Run();
       }
-      return new TestResult { Error = $"No runner available for {framework}" };
+      return new() { Error = $"No runner available for {framework}" };
     }
 
     // Spawn worker process
@@ -363,6 +726,8 @@ internal class Program {
 
       if (options.Filter != null)
         psi.Arguments += $" --filter \"{options.Filter}\"";
+      if (options.Where != null)
+        psi.Arguments += $" --where \"{EscapeForCommandLine(options.Where)}\"";
       if (options.Verbose)
         psi.Arguments += " --verbose";
 
@@ -373,25 +738,25 @@ internal class Program {
 
       using var process = Process.Start(psi);
       if (process == null)
-        return new TestResult { Error = "Failed to start worker process" };
+        return new() { Error = "Failed to start worker process" };
 
       var output = process.StandardOutput.ReadToEnd();
       var error = process.StandardError.ReadToEnd();
       process.WaitForExit();
 
       // Parse JSON result from last line
-      var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+      var lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
       var jsonLine = lines.LastOrDefault(l => l.TrimStart().StartsWith("{"));
 
       if (jsonLine != null)
         return TestResult.FromJson(jsonLine);
 
       if (!string.IsNullOrEmpty(error))
-        return new TestResult { Error = error };
+        return new() { Error = error };
 
-      return new TestResult { Error = "No result from worker" };
+      return new() { Error = "No result from worker" };
     } catch (Exception ex) {
-      return new TestResult { Error = ex.Message };
+      return new() { Error = ex.Message };
     }
   }
 
@@ -476,7 +841,7 @@ internal class Program {
     public int Skipped { get; set; }
     public double DurationSeconds { get; set; }
     public string? Error { get; set; }
-    public List<TestFailure> Failures { get; set; } = new();
+    public List<TestFailure> Failures { get; set; } = [];
 
     public string ToJson() {
       var sb = new StringBuilder();
@@ -532,7 +897,8 @@ internal class Program {
                 --depth;
                 if (depth == 0 && objStart >= 0) {
                   var objStr = arrContent.Substring(objStart, i - objStart + 1);
-                  result.Failures.Add(new TestFailure {
+                  result.Failures.Add(new()
+                  {
                     Name = ExtractString(objStr, "name") ?? "",
                     Message = ExtractString(objStr, "message") ?? ""
                   });
@@ -597,24 +963,17 @@ internal class Program {
     public string Message { get; set; } = "";
   }
 
-  internal class TestRunner {
-    private readonly string _assemblyPath;
-    private readonly string? _filter;
-    private readonly bool _verbose;
+  internal class TestRunner(string assemblyPath, string? filter, WhereExpr? whereExpr, bool verbose)
+  {
+    private readonly string _assemblyPath = Path.GetFullPath(assemblyPath);
     private int _passed;
     private int _failed;
     private int _skipped;
-    private readonly List<TestFailure> _failures = new();
+    private readonly List<TestFailure> _failures = [];
     private readonly Stopwatch _stopwatch = new();
 
-    public TestRunner(string assemblyPath, string? filter, bool verbose) {
-      _assemblyPath = Path.GetFullPath(assemblyPath);
-      _filter = filter;
-      _verbose = verbose;
-    }
-
     public TestResult Run() {
-      if (_verbose) {
+      if (verbose) {
         Console.Error.WriteLine($"Loading: {_assemblyPath}");
       }
 
@@ -628,7 +987,7 @@ internal class Program {
       // Find all test fixtures
       var testFixtures = FindTestFixtures(assembly);
 
-      if (_verbose) {
+      if (verbose) {
         Console.Error.WriteLine($"Found {testFixtures.Count} test fixture(s)");
       }
 
@@ -640,7 +999,8 @@ internal class Program {
 
       _stopwatch.Stop();
 
-      return new TestResult {
+      return new()
+      {
         Passed = _passed,
         Failed = _failed,
         Skipped = _skipped,
@@ -663,8 +1023,8 @@ internal class Program {
           .Any(m => m.GetCustomAttributes(true).Any(a => a.GetType().Name == "TestAttribute"));
 
         if (hasTestFixture || hasTestMethods) {
-          if (_filter == null || (type.FullName != null &&
-              type.FullName.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) >= 0)) {
+          if (filter == null || (type.FullName != null &&
+              type.FullName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)) {
             fixtures.Add(type);
           }
         }
@@ -674,14 +1034,14 @@ internal class Program {
     }
 
     private void RunFixture(Type fixtureType) {
-      if (_verbose)
+      if (verbose)
         Console.Error.WriteLine($"[Fixture] {fixtureType.FullName}");
 
       object? instance;
       try {
         instance = Activator.CreateInstance(fixtureType);
       } catch (Exception ex) {
-        if (_verbose)
+        if (verbose)
           Console.Error.WriteLine($"  [ERROR] Failed to create fixture: {ex.Message}");
         return;
       }
@@ -695,7 +1055,7 @@ internal class Program {
         try {
           InvokeMethod(oneTimeSetUp, instance!);
         } catch (Exception ex) {
-          if (_verbose)
+          if (verbose)
             Console.Error.WriteLine($"  [ERROR] OneTimeSetUp failed: {GetInnerMessage(ex)}");
           return;
         }
@@ -708,9 +1068,15 @@ internal class Program {
         .ToList();
 
       foreach (var testMethod in testMethods) {
-        if (_filter != null && testMethod.Name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0
-            && fixtureType.FullName!.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0)
+        if (filter != null && testMethod.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0
+            && fixtureType.FullName!.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
           continue;
+
+        if (whereExpr != null) {
+          var ctx = TestContext.FromMethod(fixtureType, testMethod);
+          if (!whereExpr.Evaluate(ctx))
+            continue;
+        }
 
         RunTest(instance!, testMethod, setUp, tearDown);
       }
@@ -722,9 +1088,15 @@ internal class Program {
         .ToList();
 
       foreach (var testMethod in testCaseMethods) {
-        if (_filter != null && testMethod.Name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0
-            && fixtureType.FullName!.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0)
+        if (filter != null && testMethod.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0
+            && fixtureType.FullName!.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0)
           continue;
+
+        if (whereExpr != null) {
+          var ctx = TestContext.FromMethod(fixtureType, testMethod);
+          if (!whereExpr.Evaluate(ctx))
+            continue;
+        }
 
         var testCases = testMethod.GetCustomAttributes(true)
           .Where(a => a.GetType().Name == "TestCaseAttribute")
@@ -784,10 +1156,10 @@ internal class Program {
 
         if (exTypeName == "SuccessException") {
           ++_passed;
-        } else if (exTypeName == "IgnoreException" || exTypeName == "InconclusiveException") {
+        } else if (exTypeName is "IgnoreException" or "InconclusiveException") {
           ++_skipped;
         } else {
-          _failures.Add(new TestFailure { Name = testName, Message = GetInnerMessage(ex) });
+          _failures.Add(new() { Name = testName, Message = GetInnerMessage(ex) });
           ++_failed;
         }
       }
@@ -812,10 +1184,10 @@ internal class Program {
 
         if (exTypeName == "SuccessException") {
           ++_passed;
-        } else if (exTypeName == "IgnoreException" || exTypeName == "InconclusiveException") {
+        } else if (exTypeName is "IgnoreException" or "InconclusiveException") {
           ++_skipped;
         } else {
-          _failures.Add(new TestFailure { Name = testName, Message = GetInnerMessage(ex) });
+          _failures.Add(new() { Name = testName, Message = GetInnerMessage(ex) });
           ++_failed;
         }
       }
@@ -892,7 +1264,7 @@ internal class Program {
         foreach (var item in enumerable) list.Add(item);
         return list.ToArray();
       }
-      return new object?[] { testCase };
+      return [testCase];
     }
 
     private static object?[]? GetTestCaseArguments(object attr) {
@@ -919,6 +1291,12 @@ internal class Program {
 
   private const int MaxDisplayLength = 32;
 
+  private static string EscapeForCommandLine(string s) {
+    if (string.IsNullOrEmpty(s))
+      return s;
+    return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+  }
+
   private static string FormatArgument(object? value) {
     if (value == null)
       return "null";
@@ -937,7 +1315,7 @@ internal class Program {
           return $"[{string.Join(", ", elements)}]";
         }
         return $"{elementType}[{arr.Length}]";
-      case IEnumerable enumerable when value is not string:
+      case IEnumerable enumerable and not string:
         var items = new List<string>();
         var count = 0;
         foreach (var item in enumerable) {
