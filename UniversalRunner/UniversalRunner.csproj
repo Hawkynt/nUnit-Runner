@@ -65,7 +65,7 @@
 
   <!-- Polyfills for net20/net35/net40 (no Task.Run, GetAwaiter, ValueTuple) -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net20' OR '$(TargetFramework)' == 'net35' OR '$(TargetFramework)' == 'net40'">
-    <ProjectReference Include="..\..\Framework (Extensions)\Backports\Backports.csproj" />
+    <PackageReference Include="FrameworkExtensions.Backports" Version="*" />
   </ItemGroup>
 
   <!-- ValueTuple for net45-net462 -->
