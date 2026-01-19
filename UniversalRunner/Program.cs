@@ -477,8 +477,9 @@ internal class Program {
     }
 
     try {
-      var runner = new TestRunner(assemblyPath, options.Filter, options.WhereExpression, options.Verbose);
-      var result = runner.Run();
+      // Use isolated AppDomain to avoid assembly version conflicts
+      // This is essential when testing Backports where SUT has different version
+      var result = IsolatedTestRunner.Run(assemblyPath, options.Filter, options.Where, options.Verbose);
 
       // Output JSON result
       Console.WriteLine(result.ToJson());
@@ -618,8 +619,9 @@ internal class Program {
     if (runnerPath == null || !File.Exists(runnerPath)) {
       // Fall back to running directly if we're compatible
       if (CanRunDirectly(framework)) {
-        var runner = new TestRunner(assemblyPath, options.Filter, options.WhereExpression, options.Verbose);
-        return runner.Run();
+        // Use isolated AppDomain to avoid assembly version conflicts
+        // This is essential when testing Backports where SUT has different version
+        return IsolatedTestRunner.Run(assemblyPath, options.Filter, options.Where, options.Verbose);
       }
       return new() { Error = $"No runner available for {framework}" };
     }
@@ -736,13 +738,47 @@ internal class Program {
       psi.RedirectStandardError = true;
       psi.CreateNoWindow = true;
 
+      if (options.Verbose)
+        Console.Error.WriteLine($"[DEBUG] Spawning: {psi.FileName} {psi.Arguments}");
+
       using var process = Process.Start(psi);
       if (process == null)
         return new() { Error = "Failed to start worker process" };
 
-      var output = process.StandardOutput.ReadToEnd();
-      var error = process.StandardError.ReadToEnd();
-      process.WaitForExit();
+      // Read both streams asynchronously to avoid deadlock
+      // (If child writes too much to stderr while we block on stdout, we deadlock)
+      var outputBuilder = new StringBuilder();
+      var errorBuilder = new StringBuilder();
+
+      process.OutputDataReceived += (_, e) => {
+        if (e.Data != null)
+          lock (outputBuilder) { outputBuilder.AppendLine(e.Data); }
+      };
+      process.ErrorDataReceived += (_, e) => {
+        if (e.Data != null) {
+          lock (errorBuilder) { errorBuilder.AppendLine(e.Data); }
+          if (options.Verbose)
+            Console.Error.WriteLine($"[WORKER-ERR] {e.Data}");
+        }
+      };
+
+      process.BeginOutputReadLine();
+      process.BeginErrorReadLine();
+
+      // Wait with timeout to avoid infinite hang
+      var timeout = TimeSpan.FromMinutes(30);
+      if (!process.WaitForExit((int)timeout.TotalMilliseconds)) {
+        try { process.Kill(); } catch { }
+        return new() { Error = $"Worker process timed out after {timeout.TotalMinutes} minutes" };
+      }
+
+      var output = outputBuilder.ToString();
+      var error = errorBuilder.ToString();
+
+      if (options.Verbose) {
+        Console.Error.WriteLine($"[DEBUG] Worker exit code: {process.ExitCode}");
+        Console.Error.WriteLine($"[DEBUG] Output length: {output.Length}, Error length: {error.Length}");
+      }
 
       // Parse JSON result from last line
       var lines = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
@@ -752,9 +788,9 @@ internal class Program {
         return TestResult.FromJson(jsonLine);
 
       if (!string.IsNullOrEmpty(error))
-        return new() { Error = error };
+        return new() { Error = $"No JSON result. Stderr: {error.Substring(0, Math.Min(500, error.Length))}" };
 
-      return new() { Error = "No result from worker" };
+      return new() { Error = $"No result from worker (exit code: {process.ExitCode}, output lines: {lines.Length})" };
     } catch (Exception ex) {
       return new() { Error = ex.Message };
     }
@@ -835,6 +871,7 @@ internal class Program {
 
   #region Test Runner (Worker)
 
+  [Serializable]
   internal class TestResult {
     public int Passed { get; set; }
     public int Failed { get; set; }
@@ -958,10 +995,104 @@ internal class Program {
     }
   }
 
+  [Serializable]
   internal class TestFailure {
     public string Name { get; set; } = "";
     public string Message { get; set; } = "";
   }
+
+  /// <summary>
+  /// Runs tests in an isolated AppDomain to avoid assembly version conflicts.
+  /// This is essential when testing Backports itself, where the test runner uses
+  /// one version of Backports and the SUT uses a different version.
+  /// </summary>
+  internal static class IsolatedTestRunner {
+    public static TestResult Run(string assemblyPath, string? filter, string? whereJson, bool verbose) {
+#if NET20 || NET35 || NET40 || NET45 || NET48 || NET461 || NET462 || NET47 || NET471 || NET472
+      var fullPath = Path.GetFullPath(assemblyPath);
+      var assemblyDir = Path.GetDirectoryName(fullPath)!;
+      var runnerDir = AppDomain.CurrentDomain.BaseDirectory;
+
+      // Create AppDomain with isolated assembly loading
+      // ApplicationBase is set to test assembly's directory so it loads its own dependencies
+      // PrivateBinPath includes runner's directory so it can find TestRunnerProxy
+      var setup = new AppDomainSetup {
+        ApplicationBase = assemblyDir,
+        PrivateBinPath = runnerDir,
+        ShadowCopyFiles = "true"
+      };
+
+      // Check for binding redirects config
+      var configFile = fullPath + ".config";
+      if (File.Exists(configFile))
+        setup.ConfigurationFile = configFile;
+
+      var domainName = $"TestDomain_{Guid.NewGuid():N}";
+      var domain = AppDomain.CreateDomain(domainName, null, setup);
+
+      try {
+        if (verbose)
+          Console.Error.WriteLine($"[ISOLATED] Created AppDomain: {domainName}");
+
+        // Create the runner proxy in the isolated domain
+        // Load the assembly from the runner's directory, not the test directory
+        var proxyType = typeof(TestRunnerProxy);
+        var runnerAssemblyPath = Path.Combine(runnerDir, "TestRunner.exe");
+        var proxy = (TestRunnerProxy)domain.CreateInstanceFromAndUnwrap(
+          runnerAssemblyPath,
+          proxyType.FullName!);
+
+        if (verbose)
+          Console.Error.WriteLine($"[ISOLATED] Created proxy, running tests from: {fullPath}");
+
+        // Run tests in isolated domain
+        return proxy.Run(fullPath, filter, whereJson, verbose);
+      } finally {
+        AppDomain.Unload(domain);
+        if (verbose)
+          Console.Error.WriteLine($"[ISOLATED] Unloaded AppDomain: {domainName}");
+      }
+#else
+      // .NET Core/5+ doesn't support AppDomain isolation the same way
+      // Fall back to direct execution
+      var runner = new TestRunner(assemblyPath, filter, ParseWhereJson(whereJson), verbose);
+      return runner.Run();
+#endif
+    }
+
+    private static WhereExpr? ParseWhereJson(string? json) {
+      if (string.IsNullOrEmpty(json))
+        return null;
+      // WhereExpr is serialized via its string representation
+      return new WhereParser(json).Parse();
+    }
+  }
+
+#if NET20 || NET35 || NET40 || NET45 || NET48 || NET461 || NET462 || NET47 || NET471 || NET472
+  /// <summary>
+  /// Proxy class that runs in the isolated AppDomain.
+  /// Must inherit from MarshalByRefObject for cross-domain communication.
+  /// </summary>
+  internal sealed class TestRunnerProxy : MarshalByRefObject {
+    public TestResult Run(string assemblyPath, string? filter, string? whereJson, bool verbose) {
+      // Parse where expression in this domain (since WhereExpr can't cross domains)
+      WhereExpr? whereExpr = null;
+      if (!string.IsNullOrEmpty(whereJson)) {
+        try {
+          whereExpr = new WhereParser(whereJson!).Parse();
+        } catch {
+          // Ignore parse errors in isolated domain
+        }
+      }
+
+      var runner = new TestRunner(assemblyPath, filter, whereExpr, verbose);
+      return runner.Run();
+    }
+
+    // Keep the proxy alive for the duration of the test run
+    public override object? InitializeLifetimeService() => null;
+  }
+#endif
 
   internal class TestRunner(string assemblyPath, string? filter, WhereExpr? whereExpr, bool verbose)
   {
@@ -973,31 +1104,47 @@ internal class Program {
     private readonly Stopwatch _stopwatch = new();
 
     public TestResult Run() {
-      if (verbose) {
-        Console.Error.WriteLine($"Loading: {_assemblyPath}");
-      }
+      if (verbose)
+        Console.Error.WriteLine($"[WORKER] Loading: {_assemblyPath}");
 
       // Set current directory to assembly location
       var assemblyDir = Path.GetDirectoryName(_assemblyPath)!;
       Environment.CurrentDirectory = assemblyDir;
 
       // Load assembly
-      var assembly = Assembly.LoadFrom(_assemblyPath);
+      Assembly assembly;
+      try {
+        assembly = Assembly.LoadFrom(_assemblyPath);
+        if (verbose)
+          Console.Error.WriteLine($"[WORKER] Assembly loaded: {assembly.FullName}");
+      } catch (Exception ex) {
+        return new() { Error = $"Failed to load assembly: {ex.Message}" };
+      }
 
       // Find all test fixtures
-      var testFixtures = FindTestFixtures(assembly);
-
-      if (verbose) {
-        Console.Error.WriteLine($"Found {testFixtures.Count} test fixture(s)");
+      List<Type> testFixtures;
+      try {
+        testFixtures = FindTestFixtures(assembly);
+        if (verbose)
+          Console.Error.WriteLine($"[WORKER] Found {testFixtures.Count} test fixture(s)");
+      } catch (Exception ex) {
+        return new() { Error = $"Failed to find test fixtures: {ex.Message}" };
       }
 
       _stopwatch.Start();
 
+      var fixtureIndex = 0;
       foreach (var fixture in testFixtures) {
+        ++fixtureIndex;
+        if (verbose && fixtureIndex % 10 == 0)
+          Console.Error.WriteLine($"[WORKER] Progress: {fixtureIndex}/{testFixtures.Count} fixtures, {_passed + _failed + _skipped} tests run");
         RunFixture(fixture);
       }
 
       _stopwatch.Stop();
+
+      if (verbose)
+        Console.Error.WriteLine($"[WORKER] Complete: {_passed} passed, {_failed} failed, {_skipped} skipped in {_stopwatch.Elapsed.TotalSeconds:F2}s");
 
       return new()
       {
@@ -1035,14 +1182,14 @@ internal class Program {
 
     private void RunFixture(Type fixtureType) {
       if (verbose)
-        Console.Error.WriteLine($"[Fixture] {fixtureType.FullName}");
+        Console.Error.WriteLine($"[FIXTURE] Starting: {fixtureType.FullName}");
 
       object? instance;
       try {
         instance = Activator.CreateInstance(fixtureType);
       } catch (Exception ex) {
         if (verbose)
-          Console.Error.WriteLine($"  [ERROR] Failed to create fixture: {ex.Message}");
+          Console.Error.WriteLine($"[FIXTURE] ERROR creating {fixtureType.Name}: {ex.Message}");
         return;
       }
 
@@ -1125,6 +1272,9 @@ internal class Program {
 
     private void RunTest(object instance, MethodInfo testMethod, MethodInfo? setUp, MethodInfo? tearDown) {
       var testName = $"{instance.GetType().Name}.{testMethod.Name}";
+
+      if (verbose)
+        Console.Error.WriteLine($"  [TEST] Starting: {testName}");
 
       // Check for skip attributes
       if (testMethod.GetCustomAttributes(true).Any(a =>
