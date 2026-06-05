@@ -1,0 +1,53 @@
+name: Build artifacts
+
+# Shared build/publish block. Called by release.yml (manual dispatch) and
+# nightly.yml (auto, on CI success). Single place that turns a commit into
+# shippable artifacts so release and nightly never diverge.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref/SHA to build (defaults to caller ref)
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Force JavaScript-based actions to run on Node 24 instead of the deprecated
+# Node 20 ahead of the 2026-06-16 hard cutover.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0                           # version.pl counts commits
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Stamp per-package versions
+        shell: bash
+        run: perl .github/workflows/scripts/version.pl --stamp
+
+      - name: Publish runner (win-x64 + linux-x64, framework-dependent)
+        shell: bash
+        run: |
+          dotnet publish UniversalRunner -c Release -f net9.0 -r win-x64   --self-contained false -o stage/win-x64
+          dotnet publish UniversalRunner -c Release -f net9.0 -r linux-x64 --self-contained false -o stage/linux-x64
+          mkdir -p dist
+          (cd stage/win-x64   && 7z a ../../dist/nUnit-Runner-win-x64.zip   . >/dev/null)
+          (cd stage/linux-x64 && tar czf ../../dist/nUnit-Runner-linux-x64.tar.gz .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-artifacts
+          path: dist/*
+          if-no-files-found: error

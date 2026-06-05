@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # release.yml calls this via `uses: ./.github/workflows/ci.yml` so releases
+  # run the exact same matrix as per-PR CI.
+  workflow_call: {}
+
+# Multi-TFM runner (net20 … net9.0): Windows builds and tests the FULL TFM
+# spread (the classic-Framework targets need Windows tooling); ubuntu builds
+# and tests the modern targets so cross-platform behavior stays honest.
+
+# Force JavaScript-based actions to run on Node 24 instead of the deprecated
+# Node 20 ahead of the 2026-06-16 hard cutover.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                          # version.pl needs full history
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Restore
+        run: dotnet restore nUnit-Runner.slnx
+      - name: Build (all target frameworks)
+        run: dotnet build nUnit-Runner.slnx --configuration Release --no-restore
+      - name: Test (all test TFMs)
+        run: dotnet test UniversalRunner.Tests --configuration Release --no-build
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Build (modern TFM)
+        run: dotnet build UniversalRunner.Tests --configuration Release -f net9.0
+      - name: Test (modern TFM)
+        run: dotnet test UniversalRunner.Tests --configuration Release -f net9.0 --no-build
