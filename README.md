@@ -1,11 +1,23 @@
-# 🧪 nUnit-Runner
+# nUnit-Runner
 
-[![License](https://img.shields.io/badge/License-LGPL_3.0-blue)](https://licenses.nuget.org/LGPL-3.0-or-later)
-![Language](https://img.shields.io/github/languages/top/Hawkynt/nUnit-Runner?color=purple)
-[![Last Commit](https://img.shields.io/github/last-commit/Hawkynt/nUnit-Runner?branch=main)](https://github.com/Hawkynt/nUnit-Runner/commits/main)
-[![Stars](https://img.shields.io/github/stars/Hawkynt/nUnit-Runner?color=yellow)](https://github.com/Hawkynt/nUnit-Runner/stargazers)
+[![License](https://img.shields.io/github/license/Hawkynt/nUnit-Runner)](https://github.com/Hawkynt/nUnit-Runner/blob/main/LICENSE)
+[![Language](https://img.shields.io/github/languages/top/Hawkynt/nUnit-Runner?color=8957D5)](https://github.com/Hawkynt/nUnit-Runner)
 
-> 🚀 A universal NUnit test runner for .NET Framework 2.0 through .NET 9.0+
+[![CI](https://github.com/Hawkynt/nUnit-Runner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Hawkynt/nUnit-Runner/actions/workflows/ci.yml)
+![Last Commit](https://img.shields.io/github/last-commit/Hawkynt/nUnit-Runner?branch=main)
+![Activity](https://img.shields.io/github/commit-activity/m/Hawkynt/nUnit-Runner)
+
+[![Stars](https://img.shields.io/github/stars/Hawkynt/nUnit-Runner?color=FFD700)](https://github.com/Hawkynt/nUnit-Runner/stargazers)
+[![Forks](https://img.shields.io/github/forks/Hawkynt/nUnit-Runner?color=008080)](https://github.com/Hawkynt/nUnit-Runner/network/members)
+[![Issues](https://img.shields.io/github/issues/Hawkynt/nUnit-Runner)](https://github.com/Hawkynt/nUnit-Runner/issues)
+![Code Size](https://img.shields.io/github/languages/code-size/Hawkynt/nUnit-Runner?color=4CAF50)
+![Repo Size](https://img.shields.io/github/repo-size/Hawkynt/nUnit-Runner?color=FF9800)
+
+[![Release](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?sort=semver)](https://github.com/Hawkynt/nUnit-Runner/releases/latest)
+[![Nightly](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?include_prereleases=true&sort=date&label=nightly&color=FF9800)](https://github.com/Hawkynt/nUnit-Runner/releases)
+[![Downloads](https://img.shields.io/github/downloads/Hawkynt/nUnit-Runner/total)](https://github.com/Hawkynt/nUnit-Runner/releases)
+
+> A universal NUnit test runner for .NET Framework 2.0 through .NET 9.0+
 
 ## ❓ Why?
 
@@ -51,7 +63,7 @@ You run: bin/Release/net9.0/TestRunner.dll Tests/bin/Release --all
 | net20, net35, net40, net45                   | netcoreapp3.1 | net5.0 - net10.0 |
 | net461, net462, net47, net471, net472, net48 |               |                  |
 
-## 📋 Usage
+## 🚀 Usage
 
 ```bash
 # Run all framework variants
@@ -149,7 +161,7 @@ Frameworks with failures:
       Object reference not set to an instance of an object
 ```
 
-## 🔨 Build
+## 🛠️ Build
 
 ```bash
 dotnet build -c Release
@@ -159,7 +171,13 @@ dotnet build -c Release
 
 For net20-net45, requires [FrameworkExtensions.Backports](https://www.nuget.org/packages/FrameworkExtensions.Backports) for Task/async support.
 
-## 📄 Licensing
+## ❤️ Support
 
-* [LGPL-3.0](https://en.wikipedia.org/wiki/GNU_Lesser_General_Public_License)
-* 🐛 Report issues at [GitHub](https://github.com/Hawkynt/nUnit-Runner)
+If this project saves you time or money, consider supporting its development:
+
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-EA4AAA?logo=githubsponsors)](https://github.com/sponsors/Hawkynt)
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-00457C?logo=paypal)](https://www.paypal.me/hawkynt)
+
+## 📜 License
+
+Licensed under LGPL-3.0-or-later — see [LICENSE](LICENSE).
