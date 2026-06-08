@@ -14,7 +14,7 @@
 ![Repo Size](https://img.shields.io/github/repo-size/Hawkynt/nUnit-Runner?color=FF9800)
 
 [![Release](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner)](https://github.com/Hawkynt/nUnit-Runner/releases/latest)
-[![Nightly](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?include_prereleases&sort=date&label=nightly&color=FF9800)](https://github.com/Hawkynt/nUnit-Runner/releases)
+[![Nightly](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?include_prereleases&sort=date&filter=nightly-*&label=nightly&color=FF9800)](https://github.com/Hawkynt/nUnit-Runner/releases)
 [![Downloads](https://img.shields.io/github/downloads/Hawkynt/nUnit-Runner/total)](https://github.com/Hawkynt/nUnit-Runner/releases)
 
 > A universal NUnit test runner for .NET Framework 2.0 through .NET 9.0+
