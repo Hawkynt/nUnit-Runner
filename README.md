@@ -13,7 +13,7 @@
 ![Code Size](https://img.shields.io/github/languages/code-size/Hawkynt/nUnit-Runner?color=4CAF50)
 ![Repo Size](https://img.shields.io/github/repo-size/Hawkynt/nUnit-Runner?color=FF9800)
 
-[![Release](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?sort=semver)](https://github.com/Hawkynt/nUnit-Runner/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner)](https://github.com/Hawkynt/nUnit-Runner/releases/latest)
 [![Nightly](https://img.shields.io/github/v/release/Hawkynt/nUnit-Runner?include_prereleases&sort=date&label=nightly&color=FF9800)](https://github.com/Hawkynt/nUnit-Runner/releases)
 [![Downloads](https://img.shields.io/github/downloads/Hawkynt/nUnit-Runner/total)](https://github.com/Hawkynt/nUnit-Runner/releases)
 
