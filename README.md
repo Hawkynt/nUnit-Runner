@@ -19,51 +19,30 @@
 
 > A universal NUnit test runner for .NET Framework 2.0 through .NET 9.0+
 
-## ❓ Why?
+## 🧭 Vision
 
-When testing polyfill libraries or multi-targeted assemblies, each target framework **must** run on its native CLR. Running a net20 test assembly on net48 would use the real BCL types instead of polyfills, giving false results.
+A polyfill library is the one thing you cannot test on a single runtime. Run a `net20` test assembly
+on `net48` and it quietly binds to the real BCL types instead of the polyfills, and every test passes
+for the wrong reason.
 
-✅ This runner ensures each framework's tests execute on the correct runtime.
+This runner exists so that never happens: one executable per target framework, each one launched on
+its own CLR, with a single command driving all of them. The aim is that "the tests pass" means the
+same thing on every target in the matrix.
 
-## ⚙️ How It Works
+## ✨ Features
 
-The project builds to **multiple separate executables**, one per target framework:
+- One executable per target framework, each running on its native CLR — `net20` through `net10.0`
+- A single invocation runs every variant, or a named subset, or one assembly
+- Filtering by test-name substring and by NUnit-style `where` expressions
+- Parallel execution across framework variants
+- A consolidated pass/fail summary across the whole matrix
 
-```
-📁 bin/Release/
-  📂 net20/TestRunner.exe       ← Runs on .NET Framework 2.0 CLR
-  📂 net35/TestRunner.exe       ← Runs on .NET Framework 3.5 CLR
-  📂 net48/TestRunner.exe       ← Runs on .NET Framework 4.8 CLR
-  📂 net9.0/TestRunner.dll      ← Runs on .NET 9 runtime
-  ...
-```
+## 📦 Installation
 
-When you run any version with `--all`, it acts as **orchestrator**:
+Build it from source (see below) and run `TestRunner` from `bin/Release/<tfm>/`, or reference it from
+the test project's own build. There is no package to install.
 
-1. 🔍 Discovers test assemblies in framework subfolders
-2. 🏃 Spawns the matching `TestRunner.exe` from sibling folders
-3. 📤 Each worker runs tests and outputs JSON
-4. 📊 Orchestrator aggregates and displays results
-
-```
-You run: bin/Release/net9.0/TestRunner.dll Tests/bin/Release --all
-         │
-         ├─ Spawns: ../net20/TestRunner.exe  → Tests net20 assembly
-         ├─ Spawns: ../net35/TestRunner.exe  → Tests net35 assembly
-         ├─ Spawns: ../net48/TestRunner.exe  → Tests net48 assembly
-         └─ Runs directly                    → Tests net9.0 assembly
-         │
-         └─ Aggregates all results
-```
-
-## 🎯 Supported Frameworks
-
-| .NET Framework                               | .NET Core     | .NET             |
-| -------------------------------------------- | ------------- | ---------------- |
-| net20, net35, net40, net45                   | netcoreapp3.1 | net5.0 - net10.0 |
-| net461, net462, net47, net471, net472, net48 |               |                  |
-
-## 🚀 Usage
+## 🚀 Quick start
 
 ```bash
 # Run all framework variants
@@ -114,6 +93,50 @@ The `--where` option supports NUnit-style filter expressions:
 | `not`   | Inverts the condition         |
 | `or`    | Either condition must be true |
 
+## ❓ Why?
+
+When testing polyfill libraries or multi-targeted assemblies, each target framework **must** run on its native CLR. Running a net20 test assembly on net48 would use the real BCL types instead of polyfills, giving false results.
+
+✅ This runner ensures each framework's tests execute on the correct runtime.
+
+## ⚙️ How It Works
+
+The project builds to **multiple separate executables**, one per target framework:
+
+```
+📁 bin/Release/
+  📂 net20/TestRunner.exe       ← Runs on .NET Framework 2.0 CLR
+  📂 net35/TestRunner.exe       ← Runs on .NET Framework 3.5 CLR
+  📂 net48/TestRunner.exe       ← Runs on .NET Framework 4.8 CLR
+  📂 net9.0/TestRunner.dll      ← Runs on .NET 9 runtime
+  ...
+```
+
+When you run any version with `--all`, it acts as **orchestrator**:
+
+1. 🔍 Discovers test assemblies in framework subfolders
+2. 🏃 Spawns the matching `TestRunner.exe` from sibling folders
+3. 📤 Each worker runs tests and outputs JSON
+4. 📊 Orchestrator aggregates and displays results
+
+```
+You run: bin/Release/net9.0/TestRunner.dll Tests/bin/Release --all
+         │
+         ├─ Spawns: ../net20/TestRunner.exe  → Tests net20 assembly
+         ├─ Spawns: ../net35/TestRunner.exe  → Tests net35 assembly
+         ├─ Spawns: ../net48/TestRunner.exe  → Tests net48 assembly
+         └─ Runs directly                    → Tests net9.0 assembly
+         │
+         └─ Aggregates all results
+```
+
+## 🎯 Supported Frameworks
+
+| .NET Framework                               | .NET Core     | .NET             |
+| -------------------------------------------- | ------------- | ---------------- |
+| net20, net35, net40, net45                   | netcoreapp3.1 | net5.0 - net10.0 |
+| net461, net462, net47, net471, net472, net48 |               |                  |
+
 ## 📊 Example Output
 
 ```
@@ -161,15 +184,15 @@ Frameworks with failures:
       Object reference not set to an instance of an object
 ```
 
-## 🛠️ Build
+## 🔌 Dependencies
+
+For net20-net45, requires [FrameworkExtensions.Backports](https://www.nuget.org/packages/FrameworkExtensions.Backports) for Task/async support.
+
+## 🛠️ Building
 
 ```bash
 dotnet build -c Release
 ```
-
-## 📦 Dependencies
-
-For net20-net45, requires [FrameworkExtensions.Backports](https://www.nuget.org/packages/FrameworkExtensions.Backports) for Task/async support.
 
 ## ❤️ Support
 
